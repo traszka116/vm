@@ -81,8 +81,6 @@ Invalid interrupt kinds or methods will cause the VM to panic.
 
 ## Building
 
-Make sure Zig is installed (https://ziglang.org/download/)
-
 To build and run the project:
 
 ```sh
@@ -93,15 +91,6 @@ To only build:
 
 ```sh
 zig build
-```
-
-## Example
-
-```zig
-Mil RA, 0x12     // Set low byte of RA
-Miu RA, 0x34     // Set high byte of RA => RA = 0x3412
-Psh RA           // Push to stack
-Pop RB           // Pop from stack into RB (RB == 0x3412)
 ```
 
 ## Project Structure
@@ -131,7 +120,8 @@ zigvm/
 - [ ] Add unit tests for instruction execution and memory/register operations
 - [ ] Improve documentation and add usage examples for writing programs targeting the VM
 
-
+## Dependencies
+zig compiler (https://ziglang.org/download/)
 
 ## License
 
