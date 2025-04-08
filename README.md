@@ -61,7 +61,7 @@ VM is a simple virtual machine implemented in the Zig programming language. It s
 
 The `Int` instruction uses values in registers to perform input/output.
 
-### Kind 0: Console
+### Mode 0: Console
 
 - `RA = 0` — Console operations
 
