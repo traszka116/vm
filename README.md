@@ -9,15 +9,16 @@ VM is a simple virtual machine implemented in the Zig programming language. It s
 - Simulated stack and memory system
 - Interrupt-based input/output
 - Written entirely in Zig for clarity and low-level control
+- Program starting from fixed point in memory `0x1000`, which leaves 4096 words of stack memory
 
 ## Registers
 
 - **General-purpose**: `RA`–`RD`, `R0`–`R7`
 - **Special-purpose**:
   - `SP`: Stack Pointer
-  - `RF`: Flags (used by `Cmp`, etc.)
+  - `RF`: Flags Register (Used to signal invalid behaviours)
   - `IP`: Instruction Pointer
-  - `RT`: Timer register
+  - `RT`: Timer register (Always contains milliseconds since 01.01.1970)
 
 ## Instructions
 
@@ -117,8 +118,6 @@ zigvm/
 - [ ] Explore writing a compiler for a simple TAC (three-address code) based language targeting the VM
 - [ ] Handle edge cases such as out-of-bounds memory access
 - [ ] Eliminate raw `@panic` calls in favor of VM-level exceptions or graceful failure handling
-- [ ] Add unit tests for instruction execution and memory/register operations
-- [ ] Improve documentation and add usage examples for writing programs targeting the VM
 
 ## Dependencies
 zig compiler (https://ziglang.org/download/)

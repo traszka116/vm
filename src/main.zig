@@ -15,7 +15,7 @@ pub fn main() !void {
 
     var instructions = std.io.fixedBufferStream(&program);
     const instruction_stream = instructions.reader();
-    var runtime = try Runtime.init(2 * 1024 * 1024, 4 * 1024, instruction_stream.any(), alloc, stdin, stdout);
+    var runtime = try Runtime.init(2 * 1024 * 1024, 4096, instruction_stream.any(), alloc, stdin, stdout);
     defer runtime.deinit();
     try runtime.start();
 }

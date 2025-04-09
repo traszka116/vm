@@ -8,14 +8,14 @@ const Runtime = @This();
 
 registers: RegisterSystem,
 memory: MemorySystem,
-stack_size: u32,
+programStart: u32,
 allocator: std.mem.Allocator,
 stdin: std.io.AnyReader,
 stdout: std.io.AnyWriter,
 
-pub fn init(memory_size: u64, stack_size: u32, reader: std.io.AnyReader, allocator: std.mem.Allocator, stdin: std.io.AnyReader, stdout: std.io.AnyWriter) !Runtime {
+pub fn init(memory_size: u64, program_start: u32, reader: std.io.AnyReader, allocator: std.mem.Allocator, stdin: std.io.AnyReader, stdout: std.io.AnyWriter) !Runtime {
     const mem = try allocator.alloc(u32, memory_size);
-    var idx = stack_size;
+    var idx = program_start;
     while (reader.readInt(u32, .big)) |word| {
         mem[idx] = word;
         idx += 1;
@@ -23,14 +23,14 @@ pub fn init(memory_size: u64, stack_size: u32, reader: std.io.AnyReader, allocat
     var rt = Runtime{
         .memory = .{ .data = mem },
         .registers = .{ .registers = undefined },
-        .stack_size = stack_size,
+        .programStart = program_start,
         .allocator = allocator,
         .stdin = stdin,
         .stdout = stdout,
     };
     @memset(&rt.registers.registers, 0);
-    rt.registers.register_set(.IP, stack_size);
-    rt.registers.register_set(.SP, stack_size);
+    rt.registers.register_set(.IP, program_start);
+    rt.registers.register_set(.SP, program_start);
     return rt;
 }
 
@@ -56,19 +56,19 @@ fn interruptHandler(self: *Runtime) !void {
         0 => console: {
             const method = self.registers.register_get(.RB);
             switch (method) {
-                0 => input: {
+                0 => input_text: {
                     const address = self.registers.register_get(.RC);
                     const ptr = @as([*]u8, @ptrFromInt(@as(usize, @intFromPtr(self.memory.data[address..].ptr))));
                     const slice = try self.stdin.readUntilDelimiter(ptr[0..((self.memory.data.len - address) * 4)], '\n');
                     self.registers.register_set(.RD, @truncate(slice.len));
-                    break :input;
+                    break :input_text;
                 },
-                1 => output: {
+                1 => output_text: {
                     const address = self.registers.register_get(.RC);
                     const len = self.registers.register_get(.RD);
                     const ptr = @as([*]u8, @ptrFromInt(@as(usize, @intFromPtr(self.memory.data[address..].ptr))));
                     try self.stdout.writeAll(ptr[0..len]);
-                    break :output;
+                    break :output_text;
                 },
                 else => @panic("Invalid interrupt."),
             }
