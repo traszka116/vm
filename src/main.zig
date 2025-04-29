@@ -6,16 +6,24 @@ pub fn main() !void {
     const alloc = gpa.allocator();
     const stdout = std.io.getStdOut().writer().any();
     const stdin = std.io.getStdIn().reader().any();
-    const program = [_]u8{
-        0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00,
-    };
 
-    var instructions = std.io.fixedBufferStream(&program);
-    const instruction_stream = instructions.reader();
-    var runtime = try Runtime.init(2 * 1024 * 1024, 4096, instruction_stream.any(), alloc, stdin, stdout);
+    var file = try std.fs.cwd().openFile("code.bin", .{});
+    defer file.close();
+    const program_stream = file.reader().any();
+
+    // while (true) {
+    //     const n = try program_stream.readInt(u32, .big);
+    //     const ptr = std.mem.asBytes(&n);
+    //     try stdout.print("{X}\n", .{ptr});
+    // }
+
+    // const program = try program_stream.readAllAlloc(alloc, 4096);
+    // defer alloc.free(program);
+    // try stdout.print("{X}\n", .{program});
+    var dump = try std.fs.cwd().createFile("dump.hex", .{});
+    defer dump.close();
+    var runtime = try Runtime.init(program_stream, alloc, stdin, stdout);
     defer runtime.deinit();
+    try dump.writeAll(@ptrCast(runtime.memory.data));
     try runtime.start();
 }

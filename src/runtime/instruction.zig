@@ -160,7 +160,15 @@ pub const Instruction = union(OpCode) {
     Divi: Reg4,
 
     pub fn fromWord(word: u32) !Instruction {
-        const bytes: [4]u8 = @as([4]u8, @bitCast(word));
+        const bytes: [4]u8 = .{
+            // 8 bits opcode
+            @intCast((word >> 24) & 0xFF),
+            // 24 bits of args
+            @intCast((word >> 16) & 0xFF),
+            @intCast((word >> 8) & 0xFF),
+            @intCast(word & 0xFF),
+        };
+        // std.log.debug("{any}\n", .{bytes});
         return switch (bytes[0]) {
             0, 1 => |n| no_args: {
                 const arg = {};
@@ -183,7 +191,7 @@ pub const Instruction = union(OpCode) {
             5, 6 => |n| immediate: {
                 const halves = split_u8(bytes[1]);
                 const register = @as(Register, @enumFromInt(halves[0]));
-                const immediate = (@as(u16, @as(u16, bytes[2]) << 8) + @as(u16, bytes[2]));
+                const immediate = (@as(u16, @as(u16, bytes[2]) << 8) + @as(u16, bytes[3]));
                 break :immediate switch (n) {
                     5 => .{ .Miu = .{ .reg = register, .imm = immediate } },
                     6 => .{ .Mil = .{ .reg = register, .imm = immediate } },

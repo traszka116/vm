@@ -13,8 +13,10 @@ allocator: std.mem.Allocator,
 stdin: std.io.AnyReader,
 stdout: std.io.AnyWriter,
 
-pub fn init(memory_size: u64, program_start: u32, reader: std.io.AnyReader, allocator: std.mem.Allocator, stdin: std.io.AnyReader, stdout: std.io.AnyWriter) !Runtime {
+pub fn init(reader: std.io.AnyReader, allocator: std.mem.Allocator, stdin: std.io.AnyReader, stdout: std.io.AnyWriter) !Runtime {
+    const memory_size = try reader.readInt(u32, .big);
     const mem = try allocator.alloc(u32, memory_size);
+    const program_start = try reader.readInt(u32, .big);
     var idx = program_start;
     while (reader.readInt(u32, .big)) |word| {
         mem[idx] = word;
@@ -42,11 +44,13 @@ pub fn deinit(self: *Runtime) void {
 fn nextInstruction(self: *Runtime) !Instruction {
     const idx = self.registers.register_get(.IP);
     self.registers.register_set(.IP, idx + 1);
-    return Instruction.fromWord(self.memory.readWord(idx + 1));
+    std.debug.print("{any}\n", .{self.registers.register_get(.IP)});
+    return Instruction.fromWord(self.memory.readWord(idx));
 }
 
 fn getInstruction(self: *Runtime, idx: u32) !Instruction {
     self.registers.register_set(.IP, idx);
+    std.debug.print("{any}\n", .{self.registers.register_get(.IP)});
     return Instruction.fromWord(self.memory.readWord(idx));
 }
 

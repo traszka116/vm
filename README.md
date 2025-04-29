@@ -29,8 +29,8 @@ VM is a simple virtual machine implemented in the Zig programming language. It s
 | `Psh`    | Pushes the value in `reg1` onto the stack |
 | `Pop`    | Pops a value from the stack into `reg1` |
 | `Jmp`    | Jumps to address stored in `reg1` |
-| `Mil`    | Sets lower 8 bits of `reg1` with immediate value |
 | `Miu`    | Sets upper 8 bits of `reg1` with immediate value |
+| `Mil`    | Sets lower 8 bits of `reg1` with immediate value |
 | `Mov`    | Sets `reg1` to the value of `reg2` |
 | `Neg`    | `reg1 = -reg2` |
 | `Not`    | `reg1 = ~reg2` |
