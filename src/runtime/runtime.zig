@@ -1,385 +1,176 @@
 const std = @import("std");
 
-const MemorySystem = @import("memory.zig");
-const RegisterSystem = @import("register.zig");
-const Register = RegisterSystem.Register;
-const Instruction = @import("instruction.zig").Instruction;
+const Instructions = @import("instruction.zig");
+const Instruction = Instructions.Instruction;
+const Cpu = @import("cpu.zig");
+const Memory = @import("memory.zig");
 const Runtime = @This();
 
-registers: RegisterSystem,
-memory: MemorySystem,
-programStart: u32,
-allocator: std.mem.Allocator,
-stdin: std.io.AnyReader,
-stdout: std.io.AnyWriter,
+const Config = packed struct {
+    magic: [4]u8,
+    hcode: u32,
+    stack_size: u32,
+    program_size: u32,
+    static_size: u32,
+    heap_size: u32,
+    entry_point: u32,
+    reserved: [16]u8,
+};
 
-pub fn init(reader: std.io.AnyReader, allocator: std.mem.Allocator, stdin: std.io.AnyReader, stdout: std.io.AnyWriter) !Runtime {
-    const memory_size = try reader.readInt(u32, .big);
-    const mem = try allocator.alloc(u32, memory_size);
-    const program_start = try reader.readInt(u32, .big);
-    var idx = program_start;
-    while (reader.readInt(u32, .big)) |word| {
-        mem[idx] = word;
-        idx += 1;
-    } else |_| {}
-    var rt = Runtime{
-        .memory = .{ .data = mem },
-        .registers = .{ .registers = undefined },
-        .programStart = program_start,
-        .allocator = allocator,
-        .stdin = stdin,
-        .stdout = stdout,
-    };
-    @memset(&rt.registers.registers, 0);
-    rt.registers.register_set(.IP, program_start);
-    rt.registers.register_set(.SP, program_start);
-    return rt;
+cpu: Cpu,
+memory: Memory,
+stdout: std.io.AnyWriter,
+stdin: std.io.AnyReader,
+source: std.io.AnyReader,
+allocator: std.mem.Allocator,
+config: Config,
+
+pub fn init(source: std.io.AnyReader, stdout: std.io.AnyWriter, stdin: std.io.AnyReader, allocator: std.mem.Allocator) !Runtime {
+    var self: Runtime = undefined;
+    self.config = try read_config(source);
+    if (!std.mem.eql(u8, &self.config.magic, "XLSD")) {
+        return error.InvalidMagicNumber;
+    }
+
+    const memory_size = self.config.stack_size + self.config.program_size + self.config.static_size + self.config.heap_size;
+    self.memory.data = try allocator.alloc(u32, (memory_size));
+    errdefer allocator.free(self.memory.data);
+
+    const data = self.memory.data;
+    _ = try source.readAll(data[self.config.stack_size..]);
+
+    self.cpu.running = true;
+    self.cpu.registers.registers = undefined;
+    self.stdin = stdin;
+    self.stdout = stdout;
+    self.allocator = allocator;
+    self.source = source;
+    const program_start = self.config.entry_point;
+    self.cpu.registers.register_set(.IP, program_start);
+    return self;
 }
 
 pub fn deinit(self: *Runtime) void {
+    self.allocator.free(self.window);
     self.allocator.free(self.memory.data);
     self.* = undefined;
 }
 
-fn nextInstruction(self: *Runtime) !Instruction {
-    const idx = self.registers.register_get(.IP);
-    self.registers.register_set(.IP, idx + 1);
-    std.debug.print("{any}\n", .{self.registers.register_get(.IP)});
-    return Instruction.fromWord(self.memory.readWord(idx));
-}
-
-fn getInstruction(self: *Runtime, idx: u32) !Instruction {
-    self.registers.register_set(.IP, idx);
-    std.debug.print("{any}\n", .{self.registers.register_get(.IP)});
-    return Instruction.fromWord(self.memory.readWord(idx));
-}
-
-fn interruptHandler(self: *Runtime) !void {
-    const kind = self.registers.register_get(.RA);
-    switch (kind) {
-        0 => console: {
-            const method = self.registers.register_get(.RB);
-            switch (method) {
-                0 => input_text: {
-                    const address = self.registers.register_get(.RC);
-                    const ptr = @as([*]u8, @ptrFromInt(@as(usize, @intFromPtr(self.memory.data[address..].ptr))));
-                    const slice = try self.stdin.readUntilDelimiter(ptr[0..((self.memory.data.len - address) * 4)], '\n');
-                    self.registers.register_set(.RD, @truncate(slice.len));
-                    break :input_text;
-                },
-                1 => output_text: {
-                    const address = self.registers.register_get(.RC);
-                    const len = self.registers.register_get(.RD);
-                    const ptr = @as([*]u8, @ptrFromInt(@as(usize, @intFromPtr(self.memory.data[address..].ptr))));
-                    try self.stdout.writeAll(ptr[0..len]);
-                    break :output_text;
-                },
-                else => @panic("Invalid interrupt."),
-            }
-            break :console;
-        },
-        else => @panic("Invalid interrupt."),
+pub fn run(self: *Runtime) !void {
+    while (self.cpu.running) {
+        const ip = self.cpu.registers.register_get(.IP);
+        const word = [4]u8{ self.source[ip], self.source[ip + 1], self.source[ip + 2], self.source[ip + 3] };
+        const instruction = Instructions.decode_instruction(word);
+        const effect = self.cpu.run_instruction(instruction, self.memory);
+        if (effect == .Interrupt) {
+            self.interrupt_handler();
+        }
     }
 }
 
-pub fn start(self: *Runtime) !void {
-    eval: switch (try self.nextInstruction()) {
-        // zero registers
-        .Hlt => {
-            break :eval;
-        },
-        .Int => {
-            try self.interruptHandler();
-            continue :eval try self.nextInstruction();
-        },
-        // one register
-        .Psh => |reg| {
-            const value = self.registers.register_get(reg);
-            const sp = self.registers.register_get(.SP);
-            const new_sp = sp - 1;
-            self.memory.writeWord(new_sp, value);
-            self.registers.register_set(.SP, new_sp);
-            continue :eval try self.nextInstruction();
-        },
-        .Pop => |reg| {
-            const sp = self.registers.register_get(.SP);
-            const new_sp = sp + 1;
-            const value = self.memory.readWord(sp);
-            self.registers.register_set(reg, value);
-            self.registers.register_set(.SP, new_sp);
-            continue :eval try self.nextInstruction();
-        },
-        .Jmp => |reg| {
-            continue :eval try self.getInstruction(self.registers.register_get(reg));
-        },
-        // register and immediate
-        .Mil => |pair| {
-            const reg = @as(Register, pair.reg);
-            const imm = @as(u16, pair.imm);
-            self.registers.register_set_low_half(reg, imm);
-            continue :eval try self.nextInstruction();
-        },
-        .Miu => |pair| {
-            const reg = @as(Register, pair.reg);
-            const imm = @as(u16, pair.imm);
-            self.registers.register_set_high_half(reg, imm);
-            continue :eval try self.nextInstruction();
-        },
-        // two registers
-        .Mov => |regs| {
-            const a = @as(Register, regs.a);
-            const b = @as(Register, regs.b);
-            const value = self.registers.register_get(b);
-            self.registers.register_set(a, value);
-            continue :eval try self.nextInstruction();
-        },
-        .Neg => |regs| {
-            const a = @as(Register, regs.a);
-            const b = @as(Register, regs.b);
-            const value = self.registers.register_get(b);
-            self.registers.register_set(a, @as(u32, @bitCast(-@as(i32, @bitCast(value)))));
-            continue :eval try self.nextInstruction();
-        },
-        .Not => |regs| {
-            const a = @as(Register, regs.a);
-            const b = @as(Register, regs.b);
-            const value = self.registers.register_get(b);
-            self.registers.register_set(a, ~value);
-            continue :eval try self.nextInstruction();
-        },
-        .Negf => |regs| {
-            const a = @as(Register, regs.a);
-            const b = @as(Register, regs.b);
-            const value = self.registers.register_get(b);
-            self.registers.register_set(a, @as(u32, @bitCast(-@as(f32, @floatFromInt(value)))));
-            continue :eval try self.nextInstruction();
-        },
-        .Itof => |regs| {
-            const a = @as(Register, regs.a);
-            const b = @as(Register, regs.b);
-            const value = self.registers.register_get(b);
-            self.registers.register_set(a, @as(u32, @bitCast(@as(f32, @floatFromInt(value)))));
-            continue :eval try self.nextInstruction();
-        },
-        .Ftoi => |regs| {
-            const a = @as(Register, regs.a);
-            const b = @as(Register, regs.b);
-            const value = self.registers.register_get(b);
-            self.registers.register_set(a, @as(u32, @intFromFloat(@as(f32, @bitCast(value)))));
-            continue :eval try self.nextInstruction();
-        },
-        .Rwd => |regs| {
-            const a = @as(Register, regs.a);
-            const b = @as(Register, regs.b);
-            const addr = self.registers.register_get(b);
-            const word = self.memory.readWord(addr);
-            self.registers.register_set(a, word);
-            continue :eval try self.nextInstruction();
-        },
-        .Wwd => |regs| {
-            const a = @as(Register, regs.a);
-            const b = @as(Register, regs.b);
-            const addr = self.registers.register_get(a);
-            const word = self.registers.register_get(b);
-            self.memory.writeWord(addr, word);
-            continue :eval try self.nextInstruction();
-        },
-        .Jif => |regs| {
-            const a = @as(Register, regs.a);
-            const b = @as(Register, regs.b);
-            if (self.registers.register_get(a) != 0) {
-                continue :eval try self.getInstruction(self.registers.register_get(b));
-            }
-            continue :eval try self.nextInstruction();
-        },
-        // three registers
-        .Jeq => |regs| {
-            const a = @as(Register, regs.a);
-            const b = @as(Register, regs.b);
-            const c = @as(Register, regs.c);
-            if (self.registers.register_get(a) == self.registers.register_get(b)) {
-                continue :eval try self.getInstruction(self.registers.register_get(c));
-            }
-            continue :eval try self.nextInstruction();
-        },
-        .Add => |regs| {
-            const a = @as(Register, regs.a);
-            const b = @as(Register, regs.b);
-            const c = @as(Register, regs.c);
-            const v1 = self.registers.register_get(b);
-            const v2 = self.registers.register_get(c);
-            const add_result = @addWithOverflow(v1, v2);
-            self.registers.register_set(a, add_result[0]);
-            self.registers.set_flag(.overflow, add_result[1]);
-            continue :eval try self.nextInstruction();
-        },
-        .Sub => |regs| {
-            const a = @as(Register, regs.a);
-            const b = @as(Register, regs.b);
-            const c = @as(Register, regs.c);
-            const v1 = self.registers.register_get(b);
-            const v2 = self.registers.register_get(c);
-            const sub_result = @subWithOverflow(v1, v2);
-            self.registers.register_set(a, sub_result[0]);
-            self.registers.set_flag(.overflow, sub_result[1]);
-            continue :eval try self.nextInstruction();
-        },
-        .Addf => |regs| {
-            const a = @as(Register, regs.a);
-            const b = @as(Register, regs.b);
-            const c = @as(Register, regs.c);
-            const v1 = @as(f32, @bitCast(self.registers.register_get(b)));
-            const v2 = @as(f32, @bitCast(self.registers.register_get(c)));
-            const result = @as(u32, @bitCast(v1 + v2));
-            self.registers.register_set(a, result);
-            continue :eval try self.nextInstruction();
-        },
-        .Subf => |regs| {
-            const a = @as(Register, regs.a);
-            const b = @as(Register, regs.b);
-            const c = @as(Register, regs.c);
-            const v1 = @as(f32, @bitCast(self.registers.register_get(b)));
-            const v2 = @as(f32, @bitCast(self.registers.register_get(c)));
-            const result = @as(u32, @bitCast(v1 - v2));
-            self.registers.register_set(a, result);
-            continue :eval try self.nextInstruction();
-        },
-        .Xor => |regs| {
-            const a = @as(Register, regs.a);
-            const b = @as(Register, regs.b);
-            const c = @as(Register, regs.c);
-            const v1 = self.registers.register_get(b);
-            const v2 = self.registers.register_get(c);
-            const result: u32 = v1 ^ v2;
-            self.registers.register_set(a, result);
-            continue :eval try self.nextInstruction();
-        },
-        .Or => |regs| {
-            const a = @as(Register, regs.a);
-            const b = @as(Register, regs.b);
-            const c = @as(Register, regs.c);
-            const v1 = self.registers.register_get(b);
-            const v2 = self.registers.register_get(c);
-            const result: u32 = v1 | v2;
-            self.registers.register_set(a, result);
-            continue :eval try self.nextInstruction();
-        },
-        .And => |regs| {
-            const a = @as(Register, regs.a);
-            const b = @as(Register, regs.b);
-            const c = @as(Register, regs.c);
-            const v1 = self.registers.register_get(b);
-            const v2 = self.registers.register_get(c);
-            const result: u32 = v1 & v2;
-            self.registers.register_set(a, result);
-            continue :eval try self.nextInstruction();
-        },
-        .Shl => |regs| {
-            const a = @as(Register, regs.a);
-            const b = @as(Register, regs.b);
-            const c = @as(Register, regs.c);
-            const v1 = self.registers.register_get(b);
-            const v2 = self.registers.register_get(c);
-            const result = std.math.shl(u32, v1, v2);
-            self.registers.register_set(a, result);
-            continue :eval try self.nextInstruction();
-        },
-        .Shr => |regs| {
-            const a = @as(Register, regs.a);
-            const b = @as(Register, regs.b);
-            const c = @as(Register, regs.c);
-            const v1 = self.registers.register_get(b);
-            const v2 = self.registers.register_get(c);
-            const result = std.math.shr(u32, v1, v2);
-            self.registers.register_set(a, result);
+fn interrupt_handler(self: *Runtime) !void {
+    const mode = self.cpu.registers.register_get(.RA);
+    const command = self.cpu.registers.register_get(.RB);
+    return (switch (mode) {
+        0 => self.console_handler(command),
+        else => error.InvalidMode,
+    }) catch error.InvalidInterrupt;
+}
 
-            continue :eval try self.nextInstruction();
-        },
-        .Cmp => |regs| {
-            const a = @as(Register, regs.a);
-            const b = @as(Register, regs.b);
-            const c = @as(Register, regs.c);
-            const v1 = self.registers.register_get(b);
-            const v2 = self.registers.register_get(c);
-            const order = std.math.order(v1, v2);
-            self.registers.register_set(a, switch (order) {
-                .gt => 1,
-                .lt => 2,
-                .eq => 4,
-            });
-            continue :eval try self.nextInstruction();
-        },
-        .Mulf => |regs| {
-            const a = @as(Register, regs.a);
-            const b = @as(Register, regs.b);
-            const c = @as(Register, regs.c);
-            const v1 = @as(f32, @floatFromInt(self.registers.register_get(b)));
-            const v2 = @as(f32, @floatFromInt(self.registers.register_get(c)));
-            const result = @as(f32, v1 * v2);
-            self.registers.register_set(a, @as(u32, @bitCast(result)));
-            continue :eval try self.nextInstruction();
-        },
-        .Divf => |regs| {
-            const a = @as(Register, regs.a);
-            const b = @as(Register, regs.b);
-            const c = @as(Register, regs.c);
-            const v1 = @as(f32, @floatFromInt(self.registers.register_get(b)));
-            const v2 = @as(f32, @floatFromInt(self.registers.register_get(c)));
-            const result = @as(f32, v1 / v2);
-            self.registers.register_set(a, @as(u32, @bitCast(result)));
-            continue :eval try self.nextInstruction();
-        },
-        // four registers
-        .Mul => |regs| {
-            const a = @as(Register, regs.a);
-            const b = @as(Register, regs.b);
-            const c = @as(Register, regs.c);
-            const d = @as(Register, regs.d);
-            const v1 = self.registers.register_get(c);
-            const v2 = self.registers.register_get(d);
-            const result = @as(u64, std.math.mulWide(u32, v1, v2));
-            const halves = @as([2]u32, @bitCast(result));
-            self.registers.register_set(a, halves[0]);
-            self.registers.register_set(b, halves[1]);
-            continue :eval try self.nextInstruction();
-        },
-        .Div => |regs| {
-            const a = @as(Register, regs.a);
-            const b = @as(Register, regs.b);
-            const c = @as(Register, regs.c);
-            const d = @as(Register, regs.d);
-            const v1 = self.registers.register_get(c);
-            const v2 = self.registers.register_get(d);
-            const result = std.math.divFloor(u32, v1, v2) catch @panic("divide by zero");
-            self.registers.register_set(a, result);
-            self.registers.register_set(b, @mod(v1, v2));
-            continue :eval try self.nextInstruction();
-        },
-        .Muli => |regs| {
-            const a = @as(Register, regs.a);
-            const b = @as(Register, regs.a);
-            const c = @as(Register, regs.a);
-            const d = @as(Register, regs.a);
-            const v1 = @as(i32, @bitCast(self.registers.register_get(a)));
-            const v2 = @as(i32, @bitCast(self.registers.register_get(b)));
-            const result = @as(i64, std.math.mulWide(i32, v1, v2));
-            const halves = @as([2]u32, @bitCast(result));
-            self.registers.register_set(c, halves[0]);
-            self.registers.register_set(d, halves[1]);
-            continue :eval try self.nextInstruction();
-        },
-        .Divi => |regs| {
-            const a = @as(Register, regs.a);
-            const b = @as(Register, regs.b);
-            const c = @as(Register, regs.c);
-            const d = @as(Register, regs.d);
-            const v1 = @as(i32, @bitCast(self.registers.register_get(c)));
-            const v2 = @as(i32, @bitCast(self.registers.register_get(d)));
-            const result = std.math.divFloor(i32, v1, v2) catch @panic("divide by zero");
+fn console_handler(self: Runtime, command: u32) !void {
+    return switch (command) {
+        0 => self.write_str(),
+        1 => self.write_char(),
+        2 => self.read_char(),
+        3 => self.read_str(),
+        4 => self.write_int(),
+        5 => self.write_uint(),
+        6 => self.write_float(),
+        7 => self.read_int(),
+        8 => self.read_uint(),
+        9 => self.read_float(),
+        else => error.InvalidCommand,
+    };
+}
 
-            self.registers.register_set(a, @as(u32, @bitCast(result)));
-            self.registers.register_set(b, @as(u32, @bitCast(@mod(v1, v2))));
-            continue :eval try self.nextInstruction();
-        },
+fn write_str(self: Runtime) !void {
+    const addr = self.cpu.registers.register_get(.RC);
+    const len = self.cpu.registers.register_get(.RD);
+    const slice: []const u8 = @as(u8, @ptrCast(self.memory.data.ptr))[addr * 4 .. addr * 4 + len];
+    try self.stdout.writeAll(slice);
+}
+fn read_str(self: Runtime) !void {
+    const addr = self.cpu.registers.register_get(.RC);
+    const len = self.cpu.registers.register_get(.RD);
+    const buff: []u8 = @as(u8, @ptrCast(self.memory.data.ptr))[addr * 4 .. addr * 4 + len];
+    const read = try self.stdin.readAll(buff);
+    self.cpu.registers.register_set(.RD, @as(u32, @truncate(read)));
+}
+fn write_char(self: Runtime) !void {
+    const val = @as(u8, @truncate(self.cpu.registers.register_get(.RC)));
+    try self.stdout.writeByte(val);
+}
+fn read_char(self: Runtime) !void {
+    const val = try self.stdin.readByte();
+    self.cpu.registers.register_set(.RC, val);
+}
+fn write_int(self: Runtime) !void {
+    const val = @as(i32, @bitCast(self.cpu.registers.register_get(.RC)));
+    try self.stdout.print("{d}", .{val});
+}
+fn write_uint(self: Runtime) !void {
+    const val = self.cpu.registers.register_get(.RC);
+    try self.stdout.print("{d}", .{val});
+}
+fn write_float(self: Runtime) !void {
+    const val = @as(f32, @bitCast(self.cpu.registers.register_get(.RC)));
+    try self.stdout.print("{f}", .{val});
+}
+fn read_int(self: Runtime) !void {
+    var buf: [64]u8 = undefined;
+    const line = try self.stdin.readUntilDelimiterOrEof(&buf, '\n');
+    if (line) |l| {
+        const val = try std.fmt.parseInt(i32, l, 10);
+        self.cpu.registers.register_set(.RC, @as(u32, @bitCast(val)));
+    } else {
+        return error.ReadError;
     }
+}
+fn read_uint(self: Runtime) !void {
+    var buf: [32]u8 = undefined;
+    const line = try self.stdin.readUntilDelimiterOrEof(&buf, '\n');
+    if (line) |l| {
+        const val = try std.fmt.parseInt(u32, l, 10);
+        self.cpu.registers.register_set(.RC, val);
+    } else {
+        return error.ReadError;
+    }
+}
+fn read_float(self: Runtime) !void {
+    var buf: [32]u8 = undefined;
+    const line = try self.stdin.readUntilDelimiterOrEof(&buf, '\n');
+    if (line) |l| {
+        const val = try std.fmt.parseFloat(f32, l);
+        self.cpu.registers.register_set(.RC, @as(u32, @bitCast(val)));
+    } else {
+        return error.ReadError;
+    }
+}
+fn read_config(stream: std.io.AnyReader) !Config {
+    var config: Config = undefined;
+    for (&config.magic) |*b| {
+        b.* = try stream.readByte();
+    }
+
+    config.hcode = try stream.readInt(u32, .big);
+    config.stack_size = try stream.readInt(u32, .big);
+    config.program_size = try stream.readInt(u32, .big);
+    config.static_size = try stream.readInt(u32, .big);
+    config.heap_size = try stream.readInt(u32, .big);
+    config.entry_point = try stream.readInt(u32, .big);
+
+    for (&config.reserved) |*b| {
+        b.* = try stream.readByte();
+    }
+    return config;
 }

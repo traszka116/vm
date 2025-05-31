@@ -1,262 +1,131 @@
-const RegisterSystem = @import("register.zig");
 const std = @import("std");
-pub const OpCode = enum(u8) {
-    /// stops runtime
-    Hlt = 0,
-    /// performs input/output operations depending on register values
-    Int,
+const Register = @import("register.zig").Register;
 
-    /// push reg1 on stack
-    Psh,
-    /// pops value from stack to reg1
-    Pop,
-    /// unconditional jump to instruction on address reg1
-    Jmp,
+const Ctl0Arg = enum { Hlt, Int, Nop };
+const Op0 = union(enum) { ctl: Ctl0Arg };
+const Args0 = struct {};
 
-    /// set upper part reg1 to immediate
-    Miu,
-    /// set lower part reg1 to immediate
-    Mil,
-    /// sets reg1 to reg2
-    Mov,
+const Ctl1Arg = enum { Jmp, Psh, Pop };
+const Op1 = union(enum) { ctl: Ctl1Arg };
+const Args1 = struct { arg: Register };
 
-    /// reg1 = -reg2
-    Neg,
-    /// reg1 = ~reg2
-    Not,
-    /// reg1 = -(reg2)
-    Negf,
+const Alu2Reg = enum { Mov, Neg, Not, Negf, Itof, Ftoi };
+const Ctl2Arg = enum { Rwd, Wwd, Jif };
+const Op2 = union(enum) { alu: Alu2Reg, ctl: Ctl2Arg };
+const Args2 = struct { arg1: Register, arg2: Register };
 
-    /// reg1 = into float (reg2)
-    Itof,
-    /// reg1 = into int (reg2)
-    Ftoi,
+const Alu3Reg = enum { Add, Sub, Addf, Subf, Xor, Or, And, Shl, Shr, Cmp, Cmpi, Cmpf, Mulf, Divf, Mul, Div, Muli, Divi };
+const Ctl3Arg = enum { Jeq };
+const Op3 = union(enum) { alu: Alu3Reg, ctl: Ctl3Arg };
+const Args3 = struct { arg1: Register, arg2: Register, arg3: Register };
 
-    /// read word from memory[reg2] to reg1
-    Rwd,
-    /// write word from reg2 to memory[reg1]
-    Wwd,
+const AluRegImm = enum { Miu, Mil };
+const OpImm = union(enum) { alu: AluRegImm };
+const ArgsImm = struct { reg: Register, imm: u16 };
 
-    /// jump to instruction on address reg2 if reg1 != 0
-    Jif,
-    /// jump to instruction on address reg3 if reg1 == reg2
-    Jeq,
+const Instr0 = struct { op: Op0, arg: Args0 };
+const Instr1 = struct { op: Op1, arg: Args1 };
+const Instr2 = struct { op: Op2, arg: Args2 };
+const Instr3 = struct { op: Op3, arg: Args3 };
+const InstrImm = struct { op: OpImm, arg: ArgsImm };
 
-    /// reg1 = reg2 + reg3
-    Add,
-    /// reg1 = reg2 - reg3
-    Sub,
+pub const Instruction = union(enum) { i0: Instr0, i1: Instr1, i2: Instr2, i3: Instr3, im: InstrImm };
 
-    /// reg1 = (reg2) + (reg3)
-    Addf,
-    /// reg1 = (reg2) - (reg3)
-    Subf,
-
-    /// reg1 = reg2 ^ reg3
-    Xor,
-    /// reg1 = reg2 | reg3
-    Or,
-    /// reg1 = reg2 & reg3
-    And,
-    /// reg1 = reg2 << reg3
-    Shl,
-    /// reg1 = reg2 >> reg3
-    Shr,
-
-    /// compare reg2 and reg3
-    /// puts one of following values into reg1
-    /// 2^0 (1) if reg2 > reg3
-    /// 2^1 (2) if reg2 < reg3
-    /// 2^2 (4) if reg2 == reg3
-    Cmp,
-
-    /// reg1 = (reg2) * (reg3)
-    Mulf,
-    /// reg1 = (reg2) / (reg3)
-    Divf,
-
-    /// store result of reg3 * reg4 into registers
-    /// reg1 (upper part),
-    /// reg2 (lower part),
-    ///
-    /// arithmetic on unsigned numbers
-    ///
-    /// reg1, reg2 = reg2 * reg3
-    Mul,
-    /// store result of reg3 / reg4 in reg1
-    /// and reminder in reg2
-    ///
-    /// arithmetic on unsigned numbers
-    ///
-    /// reg1 = reg3 / reg4
-    /// reg2 = reg3 % reg4
-    Div,
-    /// store result of reg3 * reg4 into registers
-    /// reg1 (upper part),
-    /// reg2 (lower part),
-    ///
-    /// arithmetic on signed numbers
-    ///
-    /// reg1, reg2 = reg2 * reg3
-    Muli,
-    /// store result of reg3 / reg4 in reg1
-    /// and reminder in reg2
-    ///
-    /// arithmetic on signed numbers
-    ///
-    /// reg1 = reg3 / reg4
-    /// reg2 = reg3 % reg4
-    Divi,
-};
-
-fn split_u8(v: u8) [2]u4 {
-    return [2]u4{ @as(u4, @truncate(std.math.shr(u8, v, 4))), @as(u4, @truncate(v)) };
+pub fn decode_instruction(bytes: [4]u8) ?Instruction {
+    const opcode = bytes[0];
+    switch (opcode) {
+        0x00...0x02 => |n| return switch (n) {
+            0x00 => .{ .i0 = .{ .op = .{ .ctl = .Hlt }, .arg = .{} } },
+            0x01 => .{ .i0 = .{ .op = .{ .ctl = .Int }, .arg = .{} } },
+            0x02 => .{ .i0 = .{ .op = .{ .ctl = .Nop }, .arg = .{} } },
+            else => unreachable,
+        },
+        0x03...0x05 => |n| {
+            const regi = decode_register(bytes[1]) orelse return null;
+            return switch (n) {
+                0x03 => .{ .i1 = .{ .op = .{ .ctl = .Jmp }, .arg = .{ .arg = regi } } },
+                0x04 => .{ .i1 = .{ .op = .{ .ctl = .Psh }, .arg = .{ .arg = regi } } },
+                0x05 => .{ .i1 = .{ .op = .{ .ctl = .Pop }, .arg = .{ .arg = regi } } },
+                else => unreachable,
+            };
+        },
+        0x06...0x0E => |n| {
+            const reg1 = decode_register(bytes[1]) orelse return null;
+            const reg2 = decode_register(bytes[2]) orelse return null;
+            return switch (n) {
+                0x06 => .{ .i2 = .{ .op = .{ .alu = .Mov }, .arg = .{ .arg1 = reg1, .arg2 = reg2 } } },
+                0x07 => .{ .i2 = .{ .op = .{ .alu = .Neg }, .arg = .{ .arg1 = reg1, .arg2 = reg2 } } },
+                0x08 => .{ .i2 = .{ .op = .{ .alu = .Not }, .arg = .{ .arg1 = reg1, .arg2 = reg2 } } },
+                0x09 => .{ .i2 = .{ .op = .{ .alu = .Negf }, .arg = .{ .arg1 = reg1, .arg2 = reg2 } } },
+                0x0A => .{ .i2 = .{ .op = .{ .alu = .Itof }, .arg = .{ .arg1 = reg1, .arg2 = reg2 } } },
+                0x0B => .{ .i2 = .{ .op = .{ .alu = .Ftoi }, .arg = .{ .arg1 = reg1, .arg2 = reg2 } } },
+                0x0C => .{ .i2 = .{ .op = .{ .ctl = .Rwd }, .arg = .{ .arg1 = reg1, .arg2 = reg2 } } },
+                0x0D => .{ .i2 = .{ .op = .{ .ctl = .Wwd }, .arg = .{ .arg1 = reg1, .arg2 = reg2 } } },
+                0x0E => .{ .i2 = .{ .op = .{ .ctl = .Jif }, .arg = .{ .arg1 = reg1, .arg2 = reg2 } } },
+                else => unreachable,
+            };
+        },
+        0x0F...0x10 => |n| {
+            const reg = decode_register(bytes[1]);
+            const imm = decode_immediate(.{ bytes[2], bytes[3] });
+            return switch (n) {
+                0x0F => .{ .im = .{ .op = .Miu, .arg = .{ .reg = reg, .imm = imm } } },
+                0x10 => .{ .im = .{ .op = .Mil, .arg = .{ .reg = reg, .imm = imm } } },
+                else => unreachable,
+            };
+        },
+        0x11...0x23 => |n| {
+            const r1 = decode_register(bytes[0]) orelse return null;
+            const r2 = decode_register(bytes[0]) orelse return null;
+            const r3 = decode_register(bytes[0]) orelse return null;
+            return switch (n) {
+                0x11 => .{ .i3 = .{ .op = .{ .ctl = .Jeq }, .arg = .{ .arg1 = r1, .arg2 = r2, .arg3 = r3 } } },
+                0x12 => .{ .i3 = .{ .op = .{ .alu = .Add }, .arg = .{ .arg1 = r1, .arg2 = r2, .arg3 = r3 } } },
+                0x13 => .{ .i3 = .{ .op = .{ .alu = .Sub }, .arg = .{ .arg1 = r1, .arg2 = r2, .arg3 = r3 } } },
+                0x14 => .{ .i3 = .{ .op = .{ .alu = .Addf }, .arg = .{ .arg1 = r1, .arg2 = r2, .arg3 = r3 } } },
+                0x15 => .{ .i3 = .{ .op = .{ .alu = .Subf }, .arg = .{ .arg1 = r1, .arg2 = r2, .arg3 = r3 } } },
+                0x16 => .{ .i3 = .{ .op = .{ .alu = .Xor }, .arg = .{ .arg1 = r1, .arg2 = r2, .arg3 = r3 } } },
+                0x17 => .{ .i3 = .{ .op = .{ .alu = .Or }, .arg = .{ .arg1 = r1, .arg2 = r2, .arg3 = r3 } } },
+                0x18 => .{ .i3 = .{ .op = .{ .alu = .And }, .arg = .{ .arg1 = r1, .arg2 = r2, .arg3 = r3 } } },
+                0x19 => .{ .i3 = .{ .op = .{ .alu = .Shl }, .arg = .{ .arg1 = r1, .arg2 = r2, .arg3 = r3 } } },
+                0x1A => .{ .i3 = .{ .op = .{ .alu = .Shr }, .arg = .{ .arg1 = r1, .arg2 = r2, .arg3 = r3 } } },
+                0x1B => .{ .i3 = .{ .op = .{ .alu = .Cmp }, .arg = .{ .arg1 = r1, .arg2 = r2, .arg3 = r3 } } },
+                0x1C => .{ .i3 = .{ .op = .{ .alu = .Cmpi }, .arg = .{ .arg1 = r1, .arg2 = r2, .arg3 = r3 } } },
+                0x1D => .{ .i3 = .{ .op = .{ .alu = .Cmpf }, .arg = .{ .arg1 = r1, .arg2 = r2, .arg3 = r3 } } },
+                0x1E => .{ .i3 = .{ .op = .{ .alu = .Mulf }, .arg = .{ .arg1 = r1, .arg2 = r2, .arg3 = r3 } } },
+                0x1F => .{ .i3 = .{ .op = .{ .alu = .Divf }, .arg = .{ .arg1 = r1, .arg2 = r2, .arg3 = r3 } } },
+                0x20 => .{ .i3 = .{ .op = .{ .alu = .Mul }, .arg = .{ .arg1 = r1, .arg2 = r2, .arg3 = r3 } } },
+                0x21 => .{ .i3 = .{ .op = .{ .alu = .Div }, .arg = .{ .arg1 = r1, .arg2 = r2, .arg3 = r3 } } },
+                0x22 => .{ .i3 = .{ .op = .{ .alu = .Muli }, .arg = .{ .arg1 = r1, .arg2 = r2, .arg3 = r3 } } },
+                0x23 => .{ .i3 = .{ .op = .{ .alu = .Divi }, .arg = .{ .arg1 = r1, .arg2 = r2, .arg3 = r3 } } },
+                else => unreachable,
+            };
+        },
+        else => return null,
+    }
 }
 
-pub const Instruction = union(OpCode) {
-    const Register = RegisterSystem.Register;
-    const Reg2 = struct { a: Register, b: Register };
-    const Reg3 = struct { a: Register, b: Register, c: Register };
-    const Reg4 = struct { a: Register, b: Register, c: Register, d: Register };
-    const RegImm = struct { reg: Register, imm: u16 };
-    // no args
-    Hlt: void,
-    Int: void,
-    // one register
-    Psh: Register,
-    Pop: Register,
-    Jmp: Register,
-    // immediate
-    Miu: RegImm,
-    Mil: RegImm,
-    // 2 regs
-    Mov: Reg2,
-    Neg: Reg2,
-    Not: Reg2,
-    Negf: Reg2,
-    Itof: Reg2,
-    Ftoi: Reg2,
-    Rwd: Reg2,
-    Wwd: Reg2,
-    Jif: Reg2,
-    // 3 regs
-    Jeq: Reg3,
-    Add: Reg3,
-    Sub: Reg3,
-    Addf: Reg3,
-    Subf: Reg3,
-    Xor: Reg3,
-    Or: Reg3,
-    And: Reg3,
-    Shl: Reg3,
-    Shr: Reg3,
-    Cmp: Reg3,
-    Mulf: Reg3,
-    Divf: Reg3,
-    // 4 regs
-    Mul: Reg4,
-    Div: Reg4,
-    Muli: Reg4,
-    Divi: Reg4,
-
-    pub fn fromWord(word: u32) !Instruction {
-        const bytes: [4]u8 = .{
-            // 8 bits opcode
-            @intCast((word >> 24) & 0xFF),
-            // 24 bits of args
-            @intCast((word >> 16) & 0xFF),
-            @intCast((word >> 8) & 0xFF),
-            @intCast(word & 0xFF),
-        };
-        // std.log.debug("{any}\n", .{bytes});
-        return switch (bytes[0]) {
-            0, 1 => |n| no_args: {
-                const arg = {};
-                break :no_args switch (n) {
-                    0 => .{ .Hlt = arg },
-                    1 => .{ .Int = arg },
-                    else => unreachable,
-                };
-            },
-            2, 3, 4 => |n| single_arg: {
-                const halves = split_u8(bytes[1]);
-                const register = @as(Register, @enumFromInt(halves[0]));
-                break :single_arg switch (n) {
-                    2 => .{ .Psh = register },
-                    3 => .{ .Pop = register },
-                    4 => .{ .Jmp = register },
-                    else => unreachable,
-                };
-            },
-            5, 6 => |n| immediate: {
-                const halves = split_u8(bytes[1]);
-                const register = @as(Register, @enumFromInt(halves[0]));
-                const immediate = (@as(u16, @as(u16, bytes[2]) << 8) + @as(u16, bytes[3]));
-                break :immediate switch (n) {
-                    5 => .{ .Miu = .{ .reg = register, .imm = immediate } },
-                    6 => .{ .Mil = .{ .reg = register, .imm = immediate } },
-                    else => unreachable,
-                };
-            },
-            7...15 => |n| two_registers: {
-                const halves = split_u8(bytes[1]);
-                const a = @as(Register, @enumFromInt(halves[0]));
-                const b = @as(Register, @enumFromInt(halves[1]));
-                const args = Reg2{ .a = a, .b = b };
-                break :two_registers switch (n) {
-                    7 => .{ .Mov = args },
-                    8 => .{ .Neg = args },
-                    9 => .{ .Not = args },
-                    10 => .{ .Negf = args },
-                    11 => .{ .Itof = args },
-                    12 => .{ .Ftoi = args },
-                    13 => .{ .Rwd = args },
-                    14 => .{ .Wwd = args },
-                    15 => .{ .Jif = args },
-                    else => unreachable,
-                };
-            },
-            16...26 => |n| three_registers: {
-                const halves_ab = split_u8(bytes[1]);
-                const halves_cd = split_u8(bytes[2]);
-                const a = @as(Register, @enumFromInt(halves_ab[0]));
-                const b = @as(Register, @enumFromInt(halves_ab[1]));
-                const c = @as(Register, @enumFromInt(halves_cd[0]));
-                const args = Reg3{ .a = a, .b = b, .c = c };
-                break :three_registers switch (n) {
-                    16 => .{ .Jeq = args },
-                    17 => .{ .Add = args },
-                    18 => .{ .Sub = args },
-                    29 => .{ .Addf = args },
-                    20 => .{ .Subf = args },
-                    21 => .{ .Xor = args },
-                    22 => .{ .Or = args },
-                    23 => .{ .And = args },
-                    24 => .{ .Shl = args },
-                    25 => .{ .Shr = args },
-                    26 => .{ .Cmp = args },
-                    27 => .{ .Mulf = args },
-                    28 => .{ .Divf = args },
-                    else => unreachable,
-                };
-            },
-            29...32 => |n| four_registers: {
-                const halves_ab = split_u8(bytes[1]);
-                const halves_cd = split_u8(bytes[2]);
-                const a = @as(Register, @enumFromInt(halves_ab[0]));
-                const b = @as(Register, @enumFromInt(halves_ab[1]));
-                const c = @as(Register, @enumFromInt(halves_cd[0]));
-                const d = @as(Register, @enumFromInt(halves_cd[1]));
-                const args = Reg4{ .a = a, .b = b, .c = c, .d = d };
-                break :four_registers switch (n) {
-                    29 => .{ .Mul = args },
-                    30 => .{ .Div = args },
-                    31 => .{ .Muli = args },
-                    32 => .{ .Divi = args },
-                    else => unreachable,
-                };
-            },
-            else => error.InvalidInstruction,
-        };
-    }
-};
+fn decode_register(byte: u8) ?Register {
+    return switch (byte) {
+        0x00 => .RA,
+        0x01 => .RB,
+        0x02 => .RC,
+        0x03 => .RD,
+        0x04 => .R0,
+        0x05 => .R1,
+        0x06 => .R2,
+        0x07 => .R3,
+        0x08 => .R4,
+        0x09 => .R5,
+        0x0A => .R6,
+        0x0B => .R7,
+        0x0C => .SP,
+        0x0D => .RF,
+        0x0E => .IP,
+        0x0F => .RT,
+        else => null,
+    };
+}
+fn decode_immediate(bytes: [2]u8) u16 {
+    return @as(u16, bytes[0]) << 16 | @as(u16, bytes[1]);
+}
