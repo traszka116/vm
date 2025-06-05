@@ -20,6 +20,7 @@ VM is a simple virtual machine implemented in the Zig programming language. It s
 
 
 ## VM Dependencies
+
 zig compiler (0.14.0) (https://ziglang.org/download/)
 
 # Assembler Dependencies
@@ -28,7 +29,11 @@ dotnet (9.0.2) (https://dotnet.microsoft.com/en-us/download/)
 
 FParsec (1.1.1) (https://www.nuget.org/packages/fparsec/)
 
+# How to compile
 
+To compile *virtual machine* run `zig build run` command in terminal
+
+To run *assembler* run `dotnet fsi assembler.fsx <assembly file>` command in terminal
 
 ## License
 MIT License

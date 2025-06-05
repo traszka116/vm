@@ -5,7 +5,7 @@
 | **Offset** | **Field**        | **Size** | **Description**                                                                             |
 | ---------- | ---------------- | -------- | ------------------------------------------------------------------------------------------- |
 | `0`        | `magic`          | 4 bytes  | Magic number (file signature) → used to verify it’s a valid executable                      |
-| `4`        | `hcode`          | 4 bytes  | Hardware or CPU code (u32, big-endian) identifying target architecture                      |
+| `4`        | `hcode`          | 4 bytes  | Check sum (u32, big-endian)                                                                 |
 | `8`        | `stack_size`     | 4 bytes  | Size of the program’s stack (in bytes or words, defined by system)                          |
 | `12`       | `program_size`   | 4 bytes  | Size of the program (code) segment                                                          |
 | `16`       | `static_size`    | 4 bytes  | Size of the static data segment                                                             |
